@@ -1,8 +1,10 @@
 
 import React, { useEffect, useState } from "react";
-import logo from "../assets/Images/Wings-icon 2.svg";
 import Footerlogo from "../assets/Images/Wings-footer-1.svg";
+import Arrow from "../assets/Images/arrow.svg";
 import "./styles.css";
+import Navbar from "./Navbar";
+import FAQ from "./FAQ";
 import { client, urlFor } from "../sanity/SainityClient";
 import { PortableText } from '@portabletext/react';
 import Lottie from "lottie-react";
@@ -138,7 +140,8 @@ const homeQuery = `
       _id,
       title,
       heading,
-      description,
+      description,  
+      band,
       publishedAt,
       image{
         asset->{
@@ -153,24 +156,41 @@ const homeQuery = `
 export default function HomePage() {
   const [data, setData] = useState(null);
 
+  // detect mobile breakpoint so slides group size can change
+  const [isMobile, setIsMobile] = useState(false);
+
   // live timezone clocks for hero labels
   const [indiaTime, setIndiaTime] = useState("");
   const [usaTime, setUsaTime] = useState("");
-  const [navOpen, setNavOpen] = useState(false);
 
   // slider state for testimonials
   const [index, setIndex] = useState(0);
 
+  // GSAP timeline ref for testimonial transitions
+  const testimonialTl = React.useRef(null);
+  const animatingToRef = React.useRef(-1);
+
   // safe reference to the testimonials array from fetched data
   const items = data?.testimonials?.testimonials || [];
-  // group items into slides of two entries each
+
+  // update isMobile on resize (match mobile breakpoint used elsewhere)
+  useEffect(() => {
+    if (typeof window === 'undefined') return undefined;
+    const update = () => setIsMobile(window.innerWidth <= 980);
+    update();
+    window.addEventListener('resize', update);
+    return () => window.removeEventListener('resize', update);
+  }, []);
+
+  // group items into slides: 1 per slide on mobile, 2 per slide on desktop
   const slides = React.useMemo(() => {
     const s = [];
-    for (let i = 0; i < items.length; i += 2) {
-      s.push(items.slice(i, i + 2));
+    const groupSize = isMobile ? 1 : 2;
+    for (let i = 0; i < items.length; i += groupSize) {
+      s.push(items.slice(i, i + groupSize));
     }
     return s;
-  }, [items]);
+  }, [items, isMobile]);
 
   // current slide items (two columns: left large portrait, right smaller portrait + text)
   const currentSlide = slides[index] || [];
@@ -178,12 +198,83 @@ export default function HomePage() {
   const rightItem = currentSlide[1] || null;
 
   const next = () => {
-    setIndex((i) => Math.min(i + 1, Math.max(0, slides.length - 1)));
+    // keep legacy next as fallback; prefer animateTo for transitions
+    animateTo(index + 1, 1);
   };
 
   const prev = () => {
-    setIndex((i) => Math.max(0, i - 1));
+    animateTo(index - 1, -1);
   };
+
+  // animateTo controls the transition between slides using GSAP
+  function animateTo(nextIndex, direction = 1) {
+    if (!slides.length) return;
+    const pageCount = slides.length;
+    nextIndex = ((nextIndex % pageCount) + pageCount) % pageCount;
+    if (nextIndex === index) return;
+
+    // if an animation is running, kill and snap-complete
+    if (testimonialTl.current) {
+      try {
+        testimonialTl.current.kill();
+      } catch (e) {}
+      testimonialTl.current = null;
+      animatingToRef.current = -1;
+    }
+
+    animatingToRef.current = nextIndex;
+
+    const curLeftImg = document.querySelector('.testimonial-left .large-portrait img');
+    const curRightImg = document.querySelector('.testimonial-right .small-portrait img');
+    const curTexts = Array.from(document.querySelectorAll('.testimonial-text, .testimonial-quote, .testimonial-name, .testimonial-role'));
+
+    const exitClip = direction === -1 ? 'inset(100% 0% 0% 0%)' : 'inset(0% 0% 100% 0%)';
+    const enterClipStart = direction === -1 ? 'inset(0% 0% 100% 0%)' : 'inset(100% 0% 0% 0%)';
+
+    const tl = gsap.timeline({
+      onComplete() {
+        // after exit complete, update index (DOM updates to next slide)
+        setIndex(nextIndex);
+        testimonialTl.current = null;
+        animatingToRef.current = -1;
+        // animate entry after DOM update
+        requestAnimationFrame(() => {
+          const newLeftImg = document.querySelector('.testimonial-left .large-portrait img');
+          const newRightImg = document.querySelector('.testimonial-right .small-portrait img');
+          const newTexts = Array.from(document.querySelectorAll('.testimonial-text, .testimonial-quote, .testimonial-name, .testimonial-role'));
+          if (newLeftImg) gsap.set(newLeftImg, { clipPath: enterClipStart });
+          if (newRightImg) gsap.set(newRightImg, { clipPath: enterClipStart });
+          gsap.to(newTexts, { opacity: 1, duration: 0.5, ease: 'power2.out' });
+          gsap.to(newLeftImg, { clipPath: 'inset(0% 0% 0% 0%)', duration: 1.2, ease: 'expo.out' });
+          gsap.to(newRightImg, { clipPath: 'inset(0% 0% 0% 0%)', duration: 1.2, ease: 'expo.out' });
+        });
+      },
+    });
+
+    testimonialTl.current = tl;
+
+    // exit animations
+    if (curLeftImg) tl.to(curLeftImg, { clipPath: exitClip, duration: 0.95, ease: 'power2.inOut' }, 0);
+    if (curRightImg) tl.to(curRightImg, { clipPath: exitClip, duration: 0.95, ease: 'power2.inOut' }, 0.1);
+    tl.to(curTexts, { opacity: 0, duration: 0.5, ease: 'power1.in' }, 0);
+  }
+
+  // initialize clipPath/opacity for current slide on mount/data change
+  useEffect(() => {
+    // pick images/texts for either desktop two-column layout or mobile single-card
+    const leftImg = document.querySelector('.testimonial-left .large-portrait img') || document.querySelector('.testimonial-single .large-portrait img');
+    const rightImg = document.querySelector('.testimonial-right .small-portrait img');
+    const texts = Array.from(document.querySelectorAll('.testimonial-text, .testimonial-quote, .testimonial-name, .testimonial-role, .homepage-testimonial__card-content'));
+    if (leftImg) gsap.set(leftImg, { clipPath: 'inset(0% 0% 0% 0%)' });
+    if (rightImg) gsap.set(rightImg, { clipPath: 'inset(0% 0% 0% 0%)' });
+    gsap.set(texts, { opacity: 1 });
+  }, [data, index]);
+
+  // clamp index if slides change (e.g., viewport switch)
+  useEffect(() => {
+    if (!slides.length) return;
+    if (index >= slides.length) setIndex(0);
+  }, [slides, index]);
   
 const portableComponents = {
   types: {
@@ -319,43 +410,81 @@ const portableComponents = {
     };
   }, []);
 
+  // Desktop-only: initialize the DOM-driven testimonial slider after data is available.
+  useEffect(() => {
+    if (typeof window === 'undefined') return undefined;
+    // run on desktop only (match existing CSS breakpoint where .right-nav .lets-talk hides)
+    if (window.innerWidth <= 980) return undefined;
+
+    let cleanupFn = null;
+    let mounted = true;
+
+    const loadSlider = async () => {
+      try {
+        const mod = await import('./desktopTestimonialSlider');
+        if (!mounted) return;
+        // module default is an init function that returns a cleanup function
+        if (typeof mod.default === 'function') cleanupFn = mod.default();
+      } catch (err) {
+        // eslint-disable-next-line no-console
+        console.warn('Failed to load desktop testimonial slider', err);
+      }
+    };
+
+    // Only initialize the DOM-driven slider if the legacy homepage markup exists
+    // (the module expects `.homepage-testimonial__cards-wrapper`). For our React
+    // markup we use GSAP-driven transitions below instead.
+    if (
+      data &&
+      data.testimonials &&
+      data.testimonials.testimonials &&
+      data.testimonials.testimonials.length &&
+      document.querySelector('.homepage-testimonial__cards-wrapper')
+    ) {
+      loadSlider();
+    }
+
+    return () => {
+      mounted = false;
+      if (typeof cleanupFn === 'function') cleanupFn();
+    };
+  }, [data]);
+
+  // Mobile-only: initialize mobile DOM-driven testimonial slider when our mobile wrapper exists
+  useEffect(() => {
+    if (typeof window === 'undefined') return undefined;
+    if (window.innerWidth > 980) return undefined; // mobile only
+
+    let cleanupFn = null;
+    let mounted = true;
+
+    const loadMobile = async () => {
+      try {
+        const mod = await import('./mobileTestimonialSlider');
+        if (!mounted) return;
+        if (typeof mod.default === 'function') cleanupFn = mod.default();
+      } catch (err) {
+        // eslint-disable-next-line no-console
+        console.warn('Failed to load mobile testimonial slider', err);
+      }
+    };
+
+    if (data && data.testimonials && data.testimonials.testimonials && data.testimonials.testimonials.length && document.querySelector('.homepage-testimonial__cards-wrapper-mobile')) {
+      loadMobile();
+    }
+
+    return () => {
+      mounted = false;
+      if (typeof cleanupFn === 'function') cleanupFn();
+    };
+  }, [data]);
+
   if (!data) return <div>Loading...</div>;
 
   return (
     <>
-      {/* HEADER - left links, centered logo, right CTA + mobile toggle */}
-      <header className="site-header">
-        <div className="site-inner">
-          <nav className="left-nav">
-            <a href="#what">//WHAT WE DO</a>
-            <a href="#work">//WORK</a>
-            <a href="#inside">//INSIDE WINGS</a>
-          </nav>
-
-          <div className="center-logo" aria-hidden="true">
-            <div className="logo"><img src={logo} alt="" /></div>
-          </div>
-
-          <div className="right-nav">
-            <a href="#contact" className="lets-talk">//LET'S TALK</a>
-
-            <button
-              className="mobile-toggle"
-              aria-label="Menu"
-              onClick={() => setNavOpen((s) => !s)}
-            >
-              <span className="burger" />
-            </button>
-          </div>
-        </div>
-
-        <div className={`mobile-nav ${navOpen ? "open" : ""}`}>
-          <a href="#what" onClick={() => setNavOpen(false)}>//WHAT WE DO</a>
-          <a href="#work" onClick={() => setNavOpen(false)}>//WORK</a>
-          <a href="#inside" onClick={() => setNavOpen(false)}>//INSIDE WINGS</a>
-          <a href="#contact" onClick={() => setNavOpen(false)}>//LET'S TALK</a>
-        </div>
-      </header>
+      {/* Use the Navbar component so its scroll behaviour works globally */}
+      <Navbar />
 
       {/* HERO */}
       <section className="hero section">
@@ -382,14 +511,15 @@ const portableComponents = {
              </span>
 
              </div>
-<AnimatedText
+{/* <AnimatedText
   tag="h1"
-  className="here-h1 scrub-heading"
+  className=" scrub-heading"
   text={data.hero?.heading}
-/>          </div>
-          </div>
+/>  */}
 
-        
+<h1 className="here-h1">{data.hero?.heading}</h1>
+ </div>
+          </div>  
         </div>
       </section>
 
@@ -417,14 +547,14 @@ const portableComponents = {
   </div>
 </section>
 
-      {/* PROJECTS */}
+  {/* PROJECTS */}
       <section className="projects section">
         <div className="container">
       <div className="projects-intro">
             <h3>{data.projects?.sectionTitle}</h3>
           <p className="project-description">{data.projects?.description}</p>
       </div>
-          <div><p className="project-descriptions">/ recent Works</p></div>
+          <div className="projects-wrapper"><p className="sub-texts">/ recent Works</p></div>
           <div className="project-grid">
   {data.projects?.projects?.map((project, index) => {
     
@@ -463,87 +593,48 @@ const portableComponents = {
 </div> </div>
       </section>
 
-      {/* AWARDS */}
-      {/* <section className="awards section">
-        <div className="container awards-grid">
-          <div className="awards-text">
-            <p className="project-descriptionS">{data.awards?.heading}</p>
-            <h3>{data.awards?.description}</h3>
-          </div>
 
-          {data.awards?.awardImage && (
-            <img
-            className="solana-img"
-              src={urlFor(data.awards.awardImage).url()}
-              alt="Award"
-            />
-          )}
-        </div>
-      </section> */}
 
-      {/* SERVICES */}
-      {/* <section className="services section">
-        <div className="container">
-          <h3>{data.services?.introText}</h3>
-
-          <ul className="services-list">
-            {data.services?.services?.map((service, index) => (
-              <li key={index}>{service.title}</li>
-            ))}
-          </ul>
-        </div>
-      </section> */}
-
-      {/* TRUST */}
-      {/* <section className="trust section">
-        <div className="container">
-          <h3>{data.trust?.heading}</h3>
-
-          <div className="founders">
-            {data.trust?.founders?.map((founder, index) => (
-              <div key={index}>
-                {founder.photo && (
-                  <img
-                    src={urlFor(founder.photo).width(120).url()}
-                    alt={founder.name}
-                  />
-                )}
-                <p>{founder.name}</p>
-                <span>{founder.role}</span>
-              </div>
-            ))}
-          </div>
-        </div>
-      </section> */}
       {/* TESTIMONIALS - redesigned to match provided layout */}
     <section className="testimonials section">
        <div className="testimonial-head">
-          <p className="testimonial-side">/WHAT DRIVES US</p>
+          <p className="sub-texts">/WHAT DRIVES US</p>
           
         </div>
       <div className="container testimonial-inner">
        
-<AnimatedText
+{/* <AnimatedText
   tag="h2"
   className="testimonial-heading scrub-heading"
   text="Over 270 founders have placed their trust in us"
-/>
-        <div className="testimonial-grid">
-          <div className="testimonial-left">
-            <div className="portrait large-portrait">
-              {leftItem && leftItem.photo ? (
-                <img src={urlFor(leftItem.photo).width(1200).url()} alt={leftItem.name} />
-              ) : (
-                <div className="placeholder" />
-              )}
-              <div className="portrait-overlay">{leftItem?.designation || leftItem?.name || 'Client'}</div>
-            </div>
+/> */}
 
-            <div className="testimonial-arrows">
-              <button className="arrow-btn" onClick={prev} aria-label="previous">←</button>
-              <button className="arrow-btn" onClick={next} aria-label="next">→</button>
-            </div>
-          </div>
+<h2 className="testimonial-heading scrub-heading">Over 270 founders have placed their trust in us</h2>
+        <div className="testimonial-grid">
+    <div className="testimonial-left">
+  <div className="portrait large-portrait">
+    {leftItem && leftItem.photo ? (
+      <img src={urlFor(leftItem.photo).width(1200).url()} alt={leftItem.name} />
+    ) : (
+      <div className="placeholder" />
+    )}
+
+  </div>
+
+  {/* ADD THIS BLOCK */}
+  <div className="testimonial-text">
+    <h4 className="testimonial-name">/ {leftItem?.name || ""}</h4>
+    <small className="testimonial-role">{leftItem?.designation || ""}</small>
+    <p className="testimonial-quote">
+      {leftItem?.message ? `"${leftItem.message}"` : ""}
+    </p>
+  </div>
+
+  <div className="testimonial-arrows">
+    <button className="arrow-btn" onClick={prev} aria-label="previous">←</button>
+    <button className="arrow-btn" onClick={next} aria-label="next">→</button>
+  </div>
+</div>
 
           <div className="testimonial-right">
             <div className="right-top">
@@ -564,6 +655,25 @@ const portableComponents = {
             </div>
           </div>
         </div>
+        {/* Mobile-only simple single-card wrapper: JS will move these into a viewport and animate them. */}
+        <div className="homepage-testimonial__cards-wrapper-mobile" aria-hidden="false">
+          {data.testimonials?.testimonials?.map((t) => (
+            <div key={t._id} className="homepage-testimonial__card-single-mobile">
+              <div className="mobile-portrait">
+                {t.photo ? (
+                  <img src={urlFor(t.photo).width(800).url()} alt={t.name} />
+                ) : (
+                  <div className="placeholder" />
+                )}
+              </div>
+              <div className="homepage-testimonial__card-content">
+                <h4>/ {t.name}</h4>
+                <small className="testimonial-role">{t.designation}</small>
+                <p className="testimonial-quote">{t.message}</p>
+              </div>
+            </div>
+          ))}
+        </div>
       </div>
     </section>
 
@@ -581,21 +691,22 @@ const portableComponents = {
       </section> */}
 
       {/* CTA */}
-      <section className="section">
+      <section className="section cta-section-wrapper">
         <div className="cta-section container">
-          <h5 className="title">{data.cta?.heading}</h5>
+          <h5 className="sub-texts">{data.cta?.heading}</h5>
           <h2 className="cta-text">{data.cta?.subText}</h2>
-          <p className="cts-description">{data.cta?.decription}</p>
+          <p className="cts-description">{data.cta?.description}</p>
           <a href={data.cta?.buttonLink}>
             <button className="cta-button">{data.cta?.buttonText}</button>
           </a>
         </div>
+        <div className="arrow-wrapper"><img src={Arrow} alt="" /></div>
       </section>
       {/* NEWS SECTION */}
 <section className="news section">
   <div className="container">
     <div className="news-header">
-      <p className="news-small">{data.news?.sectionTitle}</p>
+      <p className="news-small sub-texts">{data.news?.sectionTitle}</p>
       <h2 className="news-title">{data.news?.sectionHeading}</h2>
     </div>
 
@@ -612,6 +723,7 @@ const portableComponents = {
           )}
 
           <div className="news-content">
+            <div className="band"><p>{item.band}</p></div>
             <h4 className="news-small-title">{item.title}</h4>
          
     
@@ -667,10 +779,12 @@ const portableComponents = {
             {/* create the striped area with repeating linear gradient in CSS */}
             <img src={Footerlogo} alt="Wings" className="stripes-logo" />
           </div>
-
+        
+        <div className="footer-content">
           <div className="right-caption">Creative Studio for<br/>Immersive Experience</div>
-
           <div className="copyright">© 2016—{new Date().getFullYear()} Tefiti</div>
+        </div>
+       
         </div>
       </div>
     </footer>
